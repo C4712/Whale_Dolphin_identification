@@ -1,2 +1,3 @@
 # Whale_Dolphin_identification
-kaggle cv 
+
+https://www.kaggle.com/c/happy-whale-and-dolphin
