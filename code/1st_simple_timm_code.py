@@ -1,4 +1,5 @@
 from utils.triplet_loss import *
+from utils.Whalemodel import model_whale
 import os
 import gc
 import cv2
@@ -24,9 +25,6 @@ from torch.cuda import amp
 import joblib
 from tqdm import tqdm
 from collections import defaultdict
-
-
-# For Image Models
 import timm
 
 # Albumentations for augmentations
@@ -44,63 +42,18 @@ warnings.filterwarnings("ignore")
 # For descriptive error messages
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
-class model_whale(nn.Module):
-    def __init__(self, num_classes=15587, inchannels=3, model_name='senet154'):
-        super(model_whale,self).__init__()
-        planes = 2048
-        self.basemodel = timm.create_model('senet154', pretrained=False, in_chans=3)
-        local_planes = 512
-        self.local_conv = nn.Conv2d(planes, local_planes, 1)
-        self.local_bn = nn.BatchNorm2d(local_planes)
-        self.local_bn.bias.requires_grad_(False)  # no shift
-        self.bottleneck_g = nn.BatchNorm1d(planes)
-        self.bottleneck_g.bias.requires_grad_(False)  # no shift
-        # self.archead = Arcface(embedding_size=planes, classnum=num_classes, s=64.0)
-        self.fc = nn.Linear(planes, num_classes)
-#         init.normal_(self.fc.weight, std=0.001)
-#         init.constant_(self.fc.bias, 0)
-    def forward(self, x, label=None):
-        x = self.basemodel.conv1(x)
-        x = self.basemodel.bn1(x)
-        x = self.basemodel.act1(x)
-        x = self.basemodel.maxpool(x)
-        x = self.basemodel.layer1(x)
-        x = self.basemodel.layer2(x)
-        x = self.basemodel.layer3(x)
-        feat = self.basemodel.layer4(x)
-        # global feat
-        global_feat = F.avg_pool2d(feat, feat.size()[2:])
-        global_feat = global_feat.view(global_feat.size(0), -1)
-        global_feat = F.dropout(global_feat, p=0.2)
-        global_feat = self.bottleneck_g(global_feat)
-        global_feat = l2_norm(global_feat)
-
-        # local feat
-        local_feat = torch.mean(feat, -1, keepdim=True)
-        local_feat = self.local_bn(self.local_conv(local_feat))
-        local_feat = local_feat.squeeze(-1).permute(0, 2, 1)
-        local_feat = l2_norm(local_feat, axis=-1)
-
-        out = self.fc(global_feat) * 16
-        return global_feat, local_feat, out
-    
-    def getLoss(self, global_feat, local_feat, results,labels):
-        triple_loss = global_loss(TripletLoss(margin=0.3), global_feat, labels)[0] + \
-                      local_loss(TripletLoss(margin=0.3), local_feat, labels)[0]
-        loss_ = sigmoid_loss(results, labels, topk=30)
-        self.loss = triple_loss + loss_
 
 CONFIG = {"seed": 2022,
-          "epochs": 100,
+          "epochs": 30,
           "img_size": 128,
           "model_name": "tf_efficientnet_b0",
           "num_classes": 15587,
-          "train_batch_size": 128,
-          "valid_batch_size": 128,
+          "train_batch_size": 64,
+          "valid_batch_size": 64,
           "learning_rate": 1e-4,
           "scheduler": 'CosineAnnealingLR',
           "min_lr": 1e-7,
-          "T_max": 100,
+          "T_max": 30,
           "weight_decay": 1e-5,
           "n_fold": 5,
           "n_accumulate": 1,
@@ -190,7 +143,7 @@ def prepare_loaders(df, fold):
     
     return train_loader, valid_loader
 
-train_loader, valid_loader = prepare_loaders(df, fold=0)
+
 
 def fetch_scheduler(optimizer):
     if CONFIG['scheduler'] == 'CosineAnnealingLR':
@@ -203,10 +156,7 @@ def fetch_scheduler(optimizer):
         return None
         
     return scheduler
-num_classes = 15587
-model = model_whale(num_classes=num_classes, inchannels=3, model_name='senet154').cuda()
-optimizer = optim.Adam(model.parameters(), lr=CONFIG['learning_rate'], weight_decay=CONFIG['weight_decay'])
-scheduler = fetch_scheduler(optimizer)
+
 
 def train_one_epoch(model, optimizer, scheduler, dataloader, device, epoch):
     model.train()
@@ -370,6 +320,11 @@ def run_training(model, optimizer, scheduler, device, num_epochs):
     
     return model, history
 if __name__ == '__main__':
+    train_loader, valid_loader = prepare_loaders(df, fold=0)
+    num_classes = 15587
+    model = model_whale(num_classes=num_classes, inchannels=3, model_name='senet154').cuda()
+    optimizer = optim.Adam(model.parameters(), lr=CONFIG['learning_rate'], weight_decay=CONFIG['weight_decay'])
+    scheduler = fetch_scheduler(optimizer)
     model, history = run_training(model, optimizer, scheduler,
                               device=CONFIG['device'],
                               num_epochs=CONFIG['epochs'])
