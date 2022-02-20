@@ -6,6 +6,32 @@
 import torch
 from torch import nn
 from torch.autograd import Variable
+import numpy as np
+
+
+def apk(actual, predicted, k=10):
+    actual = [int(actual)]
+    if len(predicted)>k:
+        predicted = predicted[:k]
+
+    score = 0.0
+    num_hits = 0.0
+
+    for i,p in enumerate(predicted):
+        if p in actual and p not in predicted[:i]:
+            num_hits += 1.0
+            score += num_hits / (i+1.0)
+
+    if not actual:
+        return 0.0
+
+    return score / min(len(actual), k)
+
+def mapk(actual, predicted, k=10):
+    _, predicted = predicted.topk(k, 1, True, True)
+    actual = actual.data.cpu().numpy()
+    predicted = predicted.data.cpu().numpy()
+    return np.mean([apk(a,p,k) for a,p in zip(actual, predicted)])
 
 def l2_norm(input,axis=1):
     norm = torch.norm(input,2,axis,True)
@@ -23,7 +49,7 @@ def sigmoid_loss(results, labels, topk=10):
     error = torch.abs(one_hot_target - torch.sigmoid(results))
     error = error.topk(topk, 1, True, True)[0].contiguous()
     target_error = torch.zeros_like(error).float().cuda()
-    error_loss = nn.BCELoss(reduce=True)(error, target_error)
+    error_loss = nn.BCEWithLogitsLoss(reduce=True)(error, target_error) #BCELoss
     labels = labels.view(-1)
     indexs_new = (labels != 15587).nonzero().view(-1)
     if len(indexs_new) == 0:
